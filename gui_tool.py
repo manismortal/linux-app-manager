@@ -540,6 +540,58 @@ class InstallDialog(QtWidgets.QDialog):
         super().closeEvent(event)
 
 
+class CheckUpdatesThread(QtCore.QThread):
+    progress = QtCore.Signal(str)
+    finished = QtCore.Signal(dict, dict, set)  # apt_updates, snap_updates, flatpak_updates
+
+    def run(self):
+        apt_updates = {}
+        snap_updates = {}
+        flatpak_updates = set()
+
+        # APT
+        self.progress.emit("Checking APT updates...")
+        try:
+            r = subprocess.run(['apt', 'list', '--upgradable', '2>/dev/null'],
+                               capture_output=True, text=True, shell=True)
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if 'upgradable' in line:
+                    pkg = line.split('/')[0].strip()
+                    apt_updates[pkg] = True
+        except Exception:
+            pass
+
+        # Snap
+        self.progress.emit("Checking Snap updates...")
+        try:
+            r = subprocess.run(['snap', 'refresh', '--list'],
+                               capture_output=True, text=True)
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line and not line.startswith('Name') and not line.startswith('---') and not line.startswith('Snap'):
+                    parts = line.split()
+                    if parts:
+                        snap_updates[parts[0]] = True
+        except Exception:
+            pass
+
+        # Flatpak
+        self.progress.emit("Checking Flatpak updates...")
+        try:
+            r = subprocess.run(['flatpak', 'remote-ls', '--updates'],
+                               capture_output=True, text=True)
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line and '\t' in line:
+                    app_id = line.split('\t')[0].strip()
+                    flatpak_updates.add(app_id)
+        except Exception:
+            pass
+
+        self.finished.emit(apt_updates, snap_updates, flatpak_updates)
+
+
 # ======================================================================
 #  Main Window
 # ======================================================================
@@ -552,7 +604,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
 
         self.all_packages = []
         self.model = QtGui.QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Name", "Source", "Category", "Path"])
+        self.model.setHorizontalHeaderLabels(["Name", "Source", "Status", "Category", "Path"])
 
         self._build_ui()
         self._connect_signals()
@@ -618,6 +670,12 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.export_btn.setToolTip("Export installed package list to a file")
         act_gl.addWidget(self.export_btn)
 
+        self.check_updates_btn = QtWidgets.QPushButton(" Check Updates")
+        self.check_updates_btn.setStyleSheet("background-color: #5bc0de; color: white; font-weight: bold;")
+        self.check_updates_btn.setMinimumHeight(30)
+        self.check_updates_btn.setToolTip("Check which installed packages have updates available")
+        act_gl.addWidget(self.check_updates_btn)
+
         self.remove_btn = QtWidgets.QPushButton(" Remove Selected")
         self.remove_btn.setStyleSheet("background-color: #d9534f; color: white; font-weight: bold;")
         self.remove_btn.setMinimumHeight(30)
@@ -661,8 +719,9 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.package_tree.setSortingEnabled(True)
         self.package_tree.setColumnWidth(0, 250)
         self.package_tree.setColumnWidth(1, 120)
-        self.package_tree.setColumnWidth(2, 80)
-        self.package_tree.setColumnHidden(3, True)
+        self.package_tree.setColumnWidth(2, 90)
+        self.package_tree.setColumnWidth(3, 80)
+        self.package_tree.setColumnHidden(4, True)
         self.package_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.splitter.addWidget(self.package_tree)
 
@@ -705,6 +764,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.install_btn.clicked.connect(self.open_install_dialog)
         self.update_btn.clicked.connect(self.update_all_packages)
         self.export_btn.clicked.connect(self.export_package_list)
+        self.check_updates_btn.clicked.connect(self.check_updates)
         self.remove_btn.clicked.connect(self.handle_uninstallation)
         self.package_tree.customContextMenuRequested.connect(self._context_menu)
         self.package_tree.selectionModel().selectionChanged.connect(self._show_details)
@@ -735,10 +795,11 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.model.removeRows(0, self.model.rowCount())
         self.all_packages.clear()
 
-    def add_package(self, name, source, category, path=""):
+    def add_package(self, name, source, category, path="", status="Unknown"):
         self.all_packages.append({
             'name': name, 'source': source,
-            'category': category, 'path': path
+            'category': category, 'path': path,
+            'status': status
         })
 
     def _apply_filter(self):
@@ -757,6 +818,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
             items = [
                 QtGui.QStandardItem(pkg['name']),
                 QtGui.QStandardItem(pkg['source']),
+                QtGui.QStandardItem(pkg.get('status', 'Unknown')),
                 QtGui.QStandardItem(pkg['category']),
                 QtGui.QStandardItem(pkg.get('path', ''))
             ]
@@ -795,12 +857,14 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         row = idx[0].row()
         name = self.model.item(row, 0).text()
         source = self.model.item(row, 1).text()
-        category = self.model.item(row, 2).text()
-        path = self.model.item(row, 3).text()
+        status = self.model.item(row, 2).text()
+        category = self.model.item(row, 3).text()
+        path = self.model.item(row, 4).text()
 
         html = f"""<table>
 <tr><td><b>Name:</b></td><td>{name}</td></tr>
 <tr><td><b>Source:</b></td><td>{source}</td></tr>
+<tr><td><b>Status:</b></td><td>{status}</td></tr>
 <tr><td><b>Category:</b></td><td>{category}</td></tr>
 <tr><td><b>Path:</b></td><td>{path or 'N/A'}</td></tr>
 </table>"""
@@ -962,6 +1026,69 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self._apply_filter()
         QtWidgets.QMessageBox.information(self, "Full Scan", f"Found {total} applications.")
 
+    # ---------- Check Updates ----------
+    def check_updates(self):
+        if not self.all_packages:
+            QtWidgets.QMessageBox.warning(self, "No Packages",
+                "Scan for packages first, then check for updates.")
+            return
+
+        # Reset all statuses
+        for pkg in self.all_packages:
+            pkg['status'] = 'Checking...'
+        self._apply_filter()
+
+        self.progress_dialog = QtWidgets.QProgressDialog(
+            "Checking for updates...", "Cancel", 0, 0, self)
+        self.progress_dialog.setWindowTitle("Checking Updates")
+        self.progress_dialog.setWindowModality(QtCore.Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.show()
+        QtWidgets.QApplication.processEvents()
+
+        self.check_thread = CheckUpdatesThread()
+        self.check_thread.progress.connect(
+            lambda msg: self.progress_dialog.setLabelText(msg))
+        self.check_thread.finished.connect(self._on_updates_checked)
+        self.check_thread.start()
+        self.check_thread.finished.connect(self.progress_dialog.close)
+
+    def _on_updates_checked(self, apt_updates, snap_updates, flatpak_updates):
+        apt_count = 0
+        snap_count = 0
+        fp_count = 0
+        for pkg in self.all_packages:
+            src = pkg['source']
+            name = pkg['name']
+            if 'APT' in src:
+                pkg['status'] = 'Update available' if name in apt_updates else 'Up-to-date'
+                if name in apt_updates:
+                    apt_count += 1
+            elif 'Snap' in src:
+                pkg['status'] = 'Update available' if name in snap_updates else 'Up-to-date'
+                if name in snap_updates:
+                    snap_count += 1
+            elif 'Flatpak' in src:
+                full_id = pkg.get('path', '')
+                has_update = name in flatpak_updates or full_id in flatpak_updates
+                pkg['status'] = 'Update available' if has_update else 'Up-to-date'
+                if has_update:
+                    fp_count += 1
+            else:
+                pkg['status'] = 'N/A'
+
+        self._apply_filter()
+
+        total = apt_count + snap_count + fp_count
+        if total > 0:
+            QtWidgets.QMessageBox.information(self, "Updates Available",
+                f"{total} update(s) available:\n"
+                f"  APT: {apt_count}\n  Snap: {snap_count}\n  Flatpak: {fp_count}")
+        else:
+            QtWidgets.QMessageBox.information(self, "All Up-to-date",
+                "All packages are up-to-date.")
+
     # ---------- New features ----------
     def open_install_dialog(self):
         dialog = InstallDialog(self)
@@ -1086,7 +1213,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         row = indexes[0].row()
         pkg_name = self.model.item(row, 0).text()
         pkg_source = self.model.item(row, 1).text()
-        pkg_path = self.model.item(row, 3).text()
+        pkg_path = self.model.item(row, 4).text()
 
         reply = QtWidgets.QMessageBox.question(
             self, "Confirm Removal",
