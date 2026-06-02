@@ -51,6 +51,10 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
+# Detect Python version for venv package
+PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PY_VENV_PKG="python${PY_VER}-venv"
+
 # --- Create install directory ---
 echo "[1/5] Creating install directory..."
 sudo mkdir -p "${INSTALL_DIR}"
@@ -59,11 +63,18 @@ sudo chmod +x "${INSTALL_DIR}/${SCRIPT_NAME}"
 
 # --- Set up virtual environment ---
 echo "[2/5] Setting up Python virtual environment..."
-sudo python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null || {
-    # Fallback if ensurepip is missing
-    sudo apt install -y python3-venv 2>/dev/null || sudo apt install -y python3.14-venv 2>/dev/null
-    sudo python3 -m venv "${INSTALL_DIR}/venv"
-}
+if ! python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
+    # Fallback: try to install the correct python3-venv package
+    echo "     Installing ${PY_VENV_PKG}..."
+    sudo apt update -qq 2>/dev/null
+    sudo apt install -y "${PY_VENV_PKG}" 2>/dev/null || {
+        # Last resort: try common alternatives
+        for pkg in python3-venv python3.11-venv python3.10-venv python3.12-venv; do
+            sudo apt install -y "$pkg" 2>/dev/null && break
+        done
+    }
+    python3 -m venv "${INSTALL_DIR}/venv"
+fi
 sudo "${INSTALL_DIR}/venv/bin/pip" install PySide6 --quiet
 
 # --- Create wrapper launcher ---

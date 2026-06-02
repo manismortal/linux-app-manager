@@ -700,6 +700,16 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.search_input.setMinimumWidth(200)
         filter_bar.addWidget(self.search_input, stretch=1)
 
+        self.select_all_btn = QtWidgets.QPushButton("Select All")
+        self.select_all_btn.setMaximumWidth(90)
+        self.select_all_btn.setMinimumHeight(26)
+        filter_bar.addWidget(self.select_all_btn)
+
+        self.deselect_all_btn = QtWidgets.QPushButton("Deselect")
+        self.deselect_all_btn.setMaximumWidth(80)
+        self.deselect_all_btn.setMinimumHeight(26)
+        filter_bar.addWidget(self.deselect_all_btn)
+
         filter_bar.addWidget(QtWidgets.QLabel("Count:"))
         self.count_label = QtWidgets.QLabel("0")
         self.count_label.setStyleSheet("font-weight: bold;")
@@ -714,7 +724,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.package_tree = QtWidgets.QTreeView()
         self.package_tree.setModel(self.model)
         self.package_tree.setRootIsDecorated(False)
-        self.package_tree.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.package_tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.package_tree.setAlternatingRowColors(True)
         self.package_tree.setSortingEnabled(True)
         self.package_tree.setColumnWidth(0, 250)
@@ -766,6 +776,8 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.export_btn.clicked.connect(self.export_package_list)
         self.check_updates_btn.clicked.connect(self.check_updates)
         self.remove_btn.clicked.connect(self.handle_uninstallation)
+        self.select_all_btn.clicked.connect(self.select_all_packages)
+        self.deselect_all_btn.clicked.connect(self.deselect_all_packages)
         self.package_tree.customContextMenuRequested.connect(self._context_menu)
         self.package_tree.selectionModel().selectionChanged.connect(self._show_details)
         self.filter_combo.currentTextChanged.connect(self._apply_filter)
@@ -774,13 +786,26 @@ class AppScannerGUI(QtWidgets.QMainWindow):
     # ---------- System info ----------
     def _show_sysinfo(self):
         info_parts = []
+        # Try os-release first (works on all systemd-based distros)
         try:
-            r = subprocess.run(['lsb_release', '-ds'], capture_output=True, text=True)
-            os_name = r.stdout.strip()
-            if os_name:
-                info_parts.append(os_name)
+            if os.path.isfile('/etc/os-release'):
+                with open('/etc/os-release') as f:
+                    for line in f:
+                        if line.startswith('PRETTY_NAME='):
+                            val = line.split('=', 1)[1].strip().strip('"')
+                            info_parts.append(val)
+                            break
         except Exception:
             pass
+        # Fallback to lsb_release
+        if not info_parts:
+            try:
+                r = subprocess.run(['lsb_release', '-ds'], capture_output=True, text=True)
+                os_name = r.stdout.strip()
+                if os_name:
+                    info_parts.append(os_name)
+            except Exception:
+                pass
         try:
             import platform
             info_parts.append(platform.machine())
@@ -843,7 +868,13 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         if not idx.isValid():
             return
         menu = QtWidgets.QMenu()
-        menu.addAction("Remove Package").triggered.connect(self.handle_uninstallation)
+        selected = self.package_tree.selectedIndexes()
+        rows = set(idx.row() for idx in selected)
+        if len(rows) > 1:
+            menu.addAction(f"Remove {len(rows)} Packages").triggered.connect(
+                self.handle_uninstallation)
+        else:
+            menu.addAction("Remove Package").triggered.connect(self.handle_uninstallation)
         menu.addAction("Copy Name").triggered.connect(
             lambda: QtWidgets.QApplication.clipboard().setText(
                 self.model.item(idx.row(), 0).text()))
@@ -854,21 +885,43 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         if not idx:
             self.details_text.setHtml("")
             return
-        row = idx[0].row()
-        name = self.model.item(row, 0).text()
-        source = self.model.item(row, 1).text()
-        status = self.model.item(row, 2).text()
-        category = self.model.item(row, 3).text()
-        path = self.model.item(row, 4).text()
-
-        html = f"""<table>
+        rows = sorted(set(item.row() for item in idx))
+        if len(rows) == 1:
+            row = rows[0]
+            name = self.model.item(row, 0).text()
+            source = self.model.item(row, 1).text()
+            status = self.model.item(row, 2).text()
+            category = self.model.item(row, 3).text()
+            path = self.model.item(row, 4).text()
+            html = f"""<table>
 <tr><td><b>Name:</b></td><td>{name}</td></tr>
 <tr><td><b>Source:</b></td><td>{source}</td></tr>
 <tr><td><b>Status:</b></td><td>{status}</td></tr>
 <tr><td><b>Category:</b></td><td>{category}</td></tr>
 <tr><td><b>Path:</b></td><td>{path or 'N/A'}</td></tr>
 </table>"""
+        else:
+            sources = {}
+            cats = {}
+            for r in rows:
+                s = self.model.item(r, 1).text()
+                sources[s] = sources.get(s, 0) + 1
+                c = self.model.item(r, 3).text()
+                cats[c] = cats.get(c, 0) + 1
+            src_summary = ' | '.join(f"{k}: {v}" for k, v in sources.items())
+            cat_summary = ' | '.join(f"{k}: {v}" for k, v in cats.items())
+            html = f"""<table>
+<tr><td><b>Selected:</b></td><td>{len(rows)} packages</td></tr>
+<tr><td><b>Sources:</b></td><td>{src_summary}</td></tr>
+<tr><td><b>Categories:</b></td><td>{cat_summary}</td></tr>
+</table>"""
         self.details_text.setHtml(html)
+
+    def select_all_packages(self):
+        self.package_tree.selectAll()
+
+    def deselect_all_packages(self):
+        self.package_tree.clearSelection()
 
     # ---------- Scanners ----------
     def _scan_apt(self):
@@ -1207,56 +1260,76 @@ class AppScannerGUI(QtWidgets.QMainWindow):
     def handle_uninstallation(self):
         indexes = self.package_tree.selectedIndexes()
         if not indexes:
-            QtWidgets.QMessageBox.warning(self, "No Selection", "Select a package first.")
+            QtWidgets.QMessageBox.warning(self, "No Selection", "Select packages first.")
             return
 
-        row = indexes[0].row()
-        pkg_name = self.model.item(row, 0).text()
-        pkg_source = self.model.item(row, 1).text()
-        pkg_path = self.model.item(row, 4).text()
+        rows = sorted(set(idx.row() for idx in indexes))
+        packages = []
+        for r in rows:
+            packages.append({
+                'name': self.model.item(r, 0).text(),
+                'source': self.model.item(r, 1).text(),
+                'path': self.model.item(r, 4).text()
+            })
+
+        names = ', '.join(p['name'] for p in packages[:5])
+        if len(packages) > 5:
+            names += f' ... and {len(packages)-5} more'
 
         reply = QtWidgets.QMessageBox.question(
             self, "Confirm Removal",
-            f"Permanently remove '{pkg_name}'?\n\n"
-            f"Source: {pkg_source}\n\n"
+            f"Permanently remove {len(packages)} package(s)?\n\n{names}\n\n"
             "This will purge config files, orphaned deps, and cached data.",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No)
         if reply != QtWidgets.QMessageBox.Yes:
             return
 
-        self.status_bar.showMessage(f"Removing '{pkg_name}'...")
-        QtWidgets.QApplication.processEvents()
+        success_count = 0
+        fail_count = 0
+        errors = []
 
-        try:
-            if "APT" in pkg_source:
-                self._uninstall_apt(pkg_name)
-            elif "Snap" in pkg_source:
-                self._uninstall_snap(pkg_name)
-            elif "Flatpak" in pkg_source:
-                self._uninstall_flatpak(pkg_name)
-            elif "Desktop" in pkg_source:
-                self._uninstall_desktop(pkg_name, pkg_path)
-            elif "AppImage" in pkg_source:
-                self._uninstall_appimage(pkg_name, pkg_path)
-            elif "/opt" in pkg_source:
-                self._uninstall_opt(pkg_name, pkg_path)
-            else:
-                QtWidgets.QMessageBox.critical(self, "Error", f"No method for {pkg_source}")
-                return
+        for pkg in packages:
+            self.status_bar.showMessage(f"Removing '{pkg['name']}'...")
+            QtWidgets.QApplication.processEvents()
 
-            leftovers = self._scan_leftovers(pkg_name, pkg_source)
-            if leftovers:
-                self._show_leftover_dialog(pkg_name, leftovers)
-            else:
-                QtWidgets.QMessageBox.information(self, "Success",
-                    f"'{pkg_name}' removed. No leftover files found.")
-            self.clear_results()
-            self.status_bar.showMessage("Ready", 3000)
+            try:
+                if "APT" in pkg['source']:
+                    self._uninstall_apt(pkg['name'])
+                elif "Snap" in pkg['source']:
+                    self._uninstall_snap(pkg['name'])
+                elif "Flatpak" in pkg['source']:
+                    self._uninstall_flatpak(pkg['name'])
+                elif "Desktop" in pkg['source']:
+                    self._uninstall_desktop(pkg['name'], pkg['path'])
+                elif "AppImage" in pkg['source']:
+                    self._uninstall_appimage(pkg['name'], pkg['path'])
+                elif "/opt" in pkg['source']:
+                    self._uninstall_opt(pkg['name'], pkg['path'])
+                else:
+                    errors.append(f"{pkg['name']}: no method for {pkg['source']}")
+                    fail_count += 1
+                    continue
 
-        except Exception as e:
-            self.status_bar.showMessage("Removal failed", 3000)
-            QtWidgets.QMessageBox.critical(self, "Removal Failed", str(e))
+                leftovers = self._scan_leftovers(pkg['name'], pkg['source'])
+                if leftovers:
+                    self._show_leftover_dialog(pkg['name'], leftovers)
+                success_count += 1
+
+            except Exception as e:
+                errors.append(f"{pkg['name']}: {e}")
+                fail_count += 1
+
+        self.clear_results()
+        self.status_bar.showMessage(f"Removed {success_count}, failed {fail_count}", 5000)
+
+        if fail_count == 0:
+            QtWidgets.QMessageBox.information(self, "Done",
+                f"All {success_count} package(s) removed successfully.")
+        else:
+            QtWidgets.QMessageBox.warning(self, "Partial Completion",
+                f"Removed: {success_count}\nFailed: {fail_count}\n\n"
+                + '\n'.join(errors[:10]))
 
     # ---------- Leftover scan ----------
     def _scan_leftovers(self, name, source):
