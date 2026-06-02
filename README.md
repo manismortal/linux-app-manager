@@ -146,6 +146,13 @@ git clone https://github.com/manismortal/linux-app-manager.git
 
 ---
 
+## Author
+
+**Tanvir Mahdi**  
+tanirmahdi1998@gmail.com
+
+---
+
 ## License
 
 This project is open source. See the [LICENSE](LICENSE) file for details.

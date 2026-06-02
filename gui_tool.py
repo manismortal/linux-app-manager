@@ -611,6 +611,12 @@ class AppScannerGUI(QtWidgets.QMainWindow):
 
     # ---------- Build UI ----------
     def _build_ui(self):
+        # Menu bar
+        menubar = self.menuBar()
+        help_menu = menubar.addMenu("Help")
+        about_action = help_menu.addAction("About")
+        about_action.triggered.connect(self._show_about)
+
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         main_layout = QtWidgets.QVBoxLayout(central)
@@ -1157,6 +1163,21 @@ class AppScannerGUI(QtWidgets.QMainWindow):
     def open_install_dialog(self):
         dialog = InstallDialog(self)
         dialog.exec()
+
+    def _show_about(self):
+        QtWidgets.QMessageBox.about(self, "About Linux Application Manager",
+            "<h3>Linux Application Manager</h3>"
+            "<p>A GUI tool to scan, install, and remove applications<br>"
+            "from APT, Snap, Flatpak, AppImage, and manual installs.</p>"
+            "<hr>"
+            "<p><b>Author:</b> Tanvir Mahdi<br>"
+            "<b>Email:</b> tanirmahdi1998@gmail.com<br>"
+            "<b>GitHub:</b> "
+            "<a href='https://github.com/manismortal/linux-app-manager'>"
+            "github.com/manismortal/linux-app-manager</a></p>"
+            "<hr>"
+            "<p style='color: #888; font-size: 11px;'>"
+            "Built with Python 3  PySide6</p>")
 
     def update_all_packages(self):
         reply = QtWidgets.QMessageBox.question(
