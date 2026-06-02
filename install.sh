@@ -95,7 +95,8 @@ echo " [3/6] Setting up Python virtual environment..."
 if [ -d "${INSTALL_DIR}/venv" ]; then
     echo "  Virtual environment already exists. Skipping."
 else
-    if python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
+    echo "  Creating virtual environment (requires sudo)..."
+    if sudo python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
         echo "  Virtual environment created."
     else
         echo "  Installing ${PY_VER} venv package..."
@@ -112,7 +113,7 @@ else
                 fi
             done
         fi
-        python3 -m venv "${INSTALL_DIR}/venv"
+        sudo python3 -m venv "${INSTALL_DIR}/venv"
         echo "  Virtual environment created."
     fi
 fi
