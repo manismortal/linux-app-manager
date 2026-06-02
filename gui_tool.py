@@ -705,8 +705,8 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.select_all_btn.setMinimumHeight(26)
         filter_bar.addWidget(self.select_all_btn)
 
-        self.deselect_all_btn = QtWidgets.QPushButton("Deselect")
-        self.deselect_all_btn.setMaximumWidth(80)
+        self.deselect_all_btn = QtWidgets.QPushButton("Clear Selection")
+        self.deselect_all_btn.setMaximumWidth(110)
         self.deselect_all_btn.setMinimumHeight(26)
         filter_bar.addWidget(self.deselect_all_btn)
 
@@ -781,6 +781,7 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.package_tree.customContextMenuRequested.connect(self._context_menu)
         self.package_tree.selectionModel().selectionChanged.connect(self._show_details)
         self.filter_combo.currentTextChanged.connect(self._apply_filter)
+        self.filter_combo.currentIndexChanged.connect(lambda i: self._apply_filter())
         self.search_input.textChanged.connect(self._apply_filter)
 
     # ---------- System info ----------
@@ -854,14 +855,24 @@ class AppScannerGUI(QtWidgets.QMainWindow):
         self.package_tree.resizeColumnToContents(0)
         self._update_status()
 
+        if self.all_packages and not filtered:
+            total = len(self.all_packages)
+            self.status_bar.showMessage(
+                f"No packages match filter '{cat_filter}'"
+                + (f" + search '{self.search_input.text()}'" if self.search_input.text() else ""),
+                4000)
+        else:
+            self.status_bar.showMessage("", 0)
+
     def _update_status(self):
         total = len(self.all_packages)
         system = sum(1 for p in self.all_packages if p['category'] == 'System')
         user = sum(1 for p in self.all_packages if p['category'] == 'User')
+        shown = self.model.rowCount()
         self.total_label.setText(f"Total: {total}")
         self.system_label.setText(f"System: {system}")
         self.user_label.setText(f"User: {user}")
-        self.count_label.setText(str(total))
+        self.count_label.setText(f"{shown}/{total}" if shown != total else str(total))
 
     def _context_menu(self, pos):
         idx = self.package_tree.indexAt(pos)
