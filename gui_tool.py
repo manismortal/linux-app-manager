@@ -386,6 +386,27 @@ class InstallDialog(QtWidgets.QDialog):
 
         self._run_install_threaded(cmd, install_target, input_data=input_data)
 
+    def _browse_deb(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select .deb Package", "",
+            "Debian Packages (*.deb);;All Files (*)")
+        if not path:
+            return
+        self.deb_path.setText(path)
+        self.install_deb_btn.setEnabled(True)
+        try:
+            r = subprocess.run(['dpkg-deb', '--info', path], capture_output=True, text=True)
+            info_lines = []
+            for line in r.stdout.splitlines():
+                if any(k in line for k in ['Package:', 'Version:', 'Description:',
+                                            'Maintainer:', 'Architecture:', 'Size:',
+                                            'Depends:', 'Section:', 'Priority:']):
+                    info_lines.append(line.strip())
+            self.deb_info_label.setText('\n'.join(info_lines) if info_lines else
+                                        "(no details available)")
+        except Exception:
+            self.deb_info_label.setText("(could not read package info)")
+
     def _install_local_deb(self):
         path = self.deb_path.text().strip()
         if not path or not os.path.isfile(path):
