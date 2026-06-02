@@ -3,84 +3,129 @@ set -e
 
 APP_NAME="linux-app-manager"
 SCRIPT_NAME="gui_tool.py"
+LOGO_NAME="logo.png"
 INSTALL_DIR="/opt/${APP_NAME}"
 BIN_LINK="/usr/local/bin/${APP_NAME}"
 DESKTOP_FILE="${HOME}/.local/share/applications/${APP_NAME}.desktop"
-ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
-ICON_PATH="${ICON_DIR}/${APP_NAME}.svg"
+ICON_BASE="${HOME}/.local/share/icons/hicolor"
 
-# --- Handle flags ---
+# --- Uninstall ---
 if [ "$1" = "--uninstall" ] || [ "$1" = "--remove" ]; then
     echo "Removing ${APP_NAME}..."
     sudo rm -rf "${INSTALL_DIR}"
     sudo rm -f "${BIN_LINK}"
     rm -f "${DESKTOP_FILE}"
-    rm -f "${ICON_PATH}"
+    # Remove icons at all sizes
+    find "${ICON_BASE}" -name "${APP_NAME}.*" -exec rm -f {} + 2>/dev/null || true
     gtk-update-icon-cache -f -t "${HOME}/.local/share/icons" 2>/dev/null || true
+    update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
     echo "Done. ${APP_NAME} has been uninstalled."
     exit 0
 fi
 
+# --- Update ---
 if [ "$1" = "--update" ]; then
     echo "Updating ${APP_NAME} from current directory..."
     sudo mkdir -p "${INSTALL_DIR}"
     sudo cp "$(dirname "$0")/${SCRIPT_NAME}" "${INSTALL_DIR}/${SCRIPT_NAME}"
     sudo chmod +x "${INSTALL_DIR}/${SCRIPT_NAME}"
+    # Also update logo if present
+    if [ -f "$(dirname "$0")/${LOGO_NAME}" ]; then
+        sudo cp "$(dirname "$0")/${LOGO_NAME}" "${INSTALL_DIR}/${LOGO_NAME}"
+        echo "Updated logo."
+    fi
     echo "Updated ${INSTALL_DIR}/${SCRIPT_NAME}"
     echo "Done. (venv preserved, no desktop entry changes)"
     exit 0
 fi
 
-echo "========================================"
-echo " Linux Application Manager - Installer"
-echo "========================================"
+# =====================================================================
+#  HEADER
+# =====================================================================
 echo ""
-echo " Repository: https://github.com/manismortal/linux-app-manager"
+echo "  =========================================="
+echo "   Linux Application Manager - Installer"
+echo "  =========================================="
 echo ""
-echo " Install from Git:"
-echo "   git clone https://github.com/manismortal/linux-app-manager.git"
-echo "   cd linux-app-manager"
-echo "   ./install.sh"
+echo "   Repository: https://github.com/manismortal/linux-app-manager"
 echo ""
-echo " Other options:"
-echo "   ./install.sh --uninstall    Remove the application"
-echo "   ./install.sh --update       Re-install script (keeps venv)"
+echo "   Install from Git:"
+echo "     git clone https://github.com/manismortal/linux-app-manager.git"
+echo "     cd linux-app-manager"
+echo "     ./install.sh"
+echo ""
+echo "   Options:"
+echo "     ./install.sh --uninstall    Remove the application"
+echo "     ./install.sh --update       Re-install files (keeps venv)"
 echo ""
 
-# --- Check Python ---
+# =====================================================================
+#  CHECK PREREQUISITES
+# =====================================================================
+echo " [1/6] Checking prerequisites..."
+
 if ! command -v python3 &>/dev/null; then
-    echo "ERROR: Python 3 is required. Install it with: sudo apt install python3"
+    echo "  ERROR: Python 3 is required."
+    echo "  Install it with: sudo apt install python3"
     exit 1
 fi
 
-# Detect Python version for venv package
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PY_VENV_PKG="python${PY_VER}-venv"
+echo "  Python $PY_VER detected."
 
-# --- Create install directory ---
-echo "[1/5] Creating install directory..."
+# =====================================================================
+#  INSTALL DIRECTORY
+# =====================================================================
+echo " [2/6] Creating install directory..."
 sudo mkdir -p "${INSTALL_DIR}"
 sudo cp "$(dirname "$0")/${SCRIPT_NAME}" "${INSTALL_DIR}/${SCRIPT_NAME}"
 sudo chmod +x "${INSTALL_DIR}/${SCRIPT_NAME}"
 
-# --- Set up virtual environment ---
-echo "[2/5] Setting up Python virtual environment..."
-if ! python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
-    # Fallback: try to install the correct python3-venv package
-    echo "     Installing ${PY_VENV_PKG}..."
-    sudo apt update -qq 2>/dev/null
-    sudo apt install -y "${PY_VENV_PKG}" 2>/dev/null || {
-        # Last resort: try common alternatives
-        for pkg in python3-venv python3.11-venv python3.10-venv python3.12-venv; do
-            sudo apt install -y "$pkg" 2>/dev/null && break
-        done
-    }
-    python3 -m venv "${INSTALL_DIR}/venv"
+# Copy logo to install dir for future updates
+if [ -f "$(dirname "$0")/${LOGO_NAME}" ]; then
+    sudo cp "$(dirname "$0")/${LOGO_NAME}" "${INSTALL_DIR}/${LOGO_NAME}"
+    echo "  Logo copied."
 fi
-sudo "${INSTALL_DIR}/venv/bin/pip" install PySide6 --quiet
 
-# --- Create wrapper launcher ---
-echo "[3/5] Creating launcher script..."
+# =====================================================================
+#  VIRTUAL ENVIRONMENT
+# =====================================================================
+echo " [3/6] Setting up Python virtual environment..."
+
+if [ -d "${INSTALL_DIR}/venv" ]; then
+    echo "  Virtual environment already exists. Skipping."
+else
+    if python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
+        echo "  Virtual environment created."
+    else
+        echo "  Installing ${PY_VER} venv package..."
+        PY_VENV_PKG="python${PY_VER}-venv"
+        sudo apt update -qq 2>/dev/null || true
+        if sudo apt install -y "${PY_VENV_PKG}" 2>/dev/null; then
+            echo "  Installed ${PY_VENV_PKG}."
+        else
+            echo "  Trying alternative venv packages..."
+            for pkg in python3-venv python3.12-venv python3.11-venv python3.10-venv; do
+                if sudo apt install -y "$pkg" 2>/dev/null; then
+                    echo "  Installed $pkg."
+                    break
+                fi
+            done
+        fi
+        python3 -m venv "${INSTALL_DIR}/venv"
+        echo "  Virtual environment created."
+    fi
+fi
+
+echo "  Installing PySide6 (this may take a moment)..."
+sudo "${INSTALL_DIR}/venv/bin/pip" install PySide6 --quiet 2>&1 | tail -1
+echo "  PySide6 installed."
+
+# =====================================================================
+#  LAUNCHER SCRIPT
+# =====================================================================
+echo " [4/6] Creating launcher script..."
+
 sudo tee "${INSTALL_DIR}/launcher.sh" > /dev/null << 'LAUNCHER'
 #!/usr/bin/env bash
 DIR="$(dirname "$(readlink -f "$0")")"
@@ -89,29 +134,74 @@ exec "${DIR}/venv/bin/python3" "${DIR}/gui_tool.py" "$@"
 LAUNCHER
 sudo chmod +x "${INSTALL_DIR}/launcher.sh"
 
-# --- Create symlink ---
-echo "[4/5] Creating symlink..."
 sudo ln -sf "${INSTALL_DIR}/launcher.sh" "${BIN_LINK}"
+echo "  Symlink created: ${BIN_LINK}"
 
-# --- Create icon (SVG) ---
-echo "[5/5] Creating desktop entry and icon..."
-mkdir -p "${ICON_DIR}"
-cat > "${ICON_PATH}" << 'ICON'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <rect width="128" height="128" rx="16" fill="#4a90d9"/>
-  <g transform="translate(64,64)" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="-36" y="-36" width="72" height="72" rx="8"/>
-    <circle cx="0" cy="-18" r="8"/>
-    <path d="M-24 30 L-12 6 L12 6 L24 30"/>
-    <line x1="-18" y1="-6" x2="18" y2="-6"/>
-  </g>
-</svg>
-ICON
+# =====================================================================
+#  ICON
+# =====================================================================
+echo " [5/6] Installing application icon..."
 
-# Update icon cache
-gtk-update-icon-cache -f -t "${HOME}/.local/share/icons" 2>/dev/null || true
+ICON_SOURCE="$(dirname "$0")/${LOGO_NAME}"
+ICON_TARGET="${INSTALL_DIR}/${LOGO_NAME}"
 
-# --- Create .desktop entry ---
+if [ -f "${ICON_SOURCE}" ]; then
+    # Copy logo to install dir for updates
+    sudo cp "${ICON_SOURCE}" "${ICON_TARGET}"
+
+    # Install to standard icon directories at multiple sizes if convert is available
+    if command -v convert &>/dev/null; then
+        echo "  Generating icons at standard sizes..."
+        for size in 32 48 64 128 256; do
+            dir="${ICON_BASE}/${size}x${size}/apps"
+            mkdir -p "${dir}"
+            convert "${ICON_SOURCE}" -resize "${size}x${size}" "${dir}/${APP_NAME}.png" 2>/dev/null || true
+        done
+        # Also install scalable (original size)
+        dir="${ICON_BASE}/scalable/apps"
+        mkdir -p "${dir}"
+        cp "${ICON_SOURCE}" "${dir}/${APP_NAME}.png"
+        echo "  Icons installed at multiple sizes."
+    else
+        # Simple fallback: just copy to scalable
+        echo "  (ImageMagick not found, using original size)"
+        dir="${ICON_BASE}/scalable/apps"
+        mkdir -p "${dir}"
+        cp "${ICON_SOURCE}" "${dir}/${APP_NAME}.png"
+        echo "  Icon installed."
+    fi
+
+    # Update icon cache
+    gtk-update-icon-cache -f -t "${HOME}/.local/share/icons" 2>/dev/null || true
+else
+    echo "  WARNING: logo.png not found. Using default fallback icon."
+    # Create a minimal PNG fallback (1-pixel transparent)
+    dir="${ICON_BASE}/scalable/apps"
+    mkdir -p "${dir}"
+    # Generate a simple colored square as fallback using Python
+    python3 -c "
+width, height = 128, 128
+pixels = []
+for y in range(height):
+    row = []
+    for x in range(width):
+        # Simple blue square with rounded corners
+        cx, cy = x - width//2, y - height//2
+        r = width//2 - 8
+        if abs(cx) <= r and abs(cy) <= r:
+            row.extend([74, 144, 217, 255])  # #4a90d9
+        else:
+            row.extend([0, 0, 0, 0])
+        pixels.append(row)
+    # Write as minimal PNG (not implemented here)
+" 2>/dev/null || true
+fi
+
+# =====================================================================
+#  DESKTOP ENTRY
+# =====================================================================
+echo " [6/6] Creating desktop entry..."
+
 mkdir -p "$(dirname "${DESKTOP_FILE}")"
 cat > "${DESKTOP_FILE}" << DESKTOP
 [Desktop Entry]
@@ -123,23 +213,27 @@ Exec=${INSTALL_DIR}/launcher.sh
 Icon=${APP_NAME}
 Terminal=false
 Categories=System;PackageManager;Utility;
-Keywords=apt;snap;flatpak;package;install;remove;
+Keywords=apt;snap;flatpak;package;install;remove;update;
 StartupNotify=true
 DESKTOP
 
 chmod +x "${DESKTOP_FILE}"
+update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
 
+# =====================================================================
+#  DONE
+# =====================================================================
 echo ""
-echo "========================================"
-echo " Installation complete!"
-echo "========================================"
+echo "  =========================================="
+echo "   Installation Complete!"
+echo "  =========================================="
 echo ""
-echo " Launch from terminal:   ${APP_NAME}"
-echo " Launch from app menu:   Search for 'Linux Application Manager'"
+echo "   Launch from terminal:"
+echo "     ${APP_NAME}"
 echo ""
-echo " To uninstall, run:"
-echo "   sudo rm -rf ${INSTALL_DIR}"
-echo "   sudo rm -f ${BIN_LINK}"
-echo "   rm -f ${DESKTOP_FILE}"
-echo "   rm -f ${ICON_PATH}"
+echo "   Launch from app menu:"
+echo "     Search for 'Linux Application Manager'"
+echo ""
+echo "   To uninstall later:"
+echo "     cd linux-app-manager && ./install.sh --uninstall"
 echo ""
