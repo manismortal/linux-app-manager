@@ -46,17 +46,22 @@ class SudoExecutor:
 class InstallThread(QtCore.QThread):
     completed = QtCore.Signal(bool, str)
 
-    def __init__(self, cmd, parent=None):
+    def __init__(self, cmd, parent=None, input_data=None):
         super().__init__(parent)
         self.cmd = cmd
+        self.input_data = input_data
 
     def run(self):
         try:
-            result = subprocess.run(self.cmd, capture_output=True, text=True, timeout=300)
+            kwargs = {'capture_output': True, 'text': True, 'timeout': 300}
+            if self.input_data is not None:
+                kwargs['input'] = self.input_data
+            result = subprocess.run(self.cmd, **kwargs)
             if result.returncode == 0:
                 self.completed.emit(True, "")
             else:
-                self.completed.emit(False, result.stderr or f"Exit code {result.returncode}")
+                err = result.stderr or f"Exit code {result.returncode}"
+                self.completed.emit(False, err)
         except subprocess.TimeoutExpired:
             self.completed.emit(False, "Installation timed out.")
         except Exception as e:
@@ -346,20 +351,40 @@ class InstallDialog(QtWidgets.QDialog):
         if reply != QtWidgets.QMessageBox.Yes:
             return
 
-        # Build command
+        input_data = None
         if source == "APT":
             base = ['apt', 'install', '-y', install_target]
-            cmd = ['pkexec'] + base if SudoExecutor.has_pkexec() else ['sudo', '-S'] + base
+            if SudoExecutor.has_pkexec():
+                cmd = ['pkexec'] + base
+            else:
+                password, ok = QtWidgets.QInputDialog.getText(
+                    self, "Sudo Password",
+                    "Root access required for APT install.\nEnter sudo password:",
+                    QtWidgets.QLineEdit.Password)
+                if not ok or not password:
+                    return
+                cmd = ['sudo', '-S'] + base
+                input_data = password + '\n'
         elif source == "Snap":
             base = ['snap', 'install', install_target]
-            cmd = ['pkexec'] + base if SudoExecutor.has_pkexec() else ['sudo', '-S'] + base
+            if SudoExecutor.has_pkexec():
+                cmd = ['pkexec'] + base
+            else:
+                password, ok = QtWidgets.QInputDialog.getText(
+                    self, "Sudo Password",
+                    "Root access required for Snap install.\nEnter sudo password:",
+                    QtWidgets.QLineEdit.Password)
+                if not ok or not password:
+                    return
+                cmd = ['sudo', '-S'] + base
+                input_data = password + '\n'
         elif source == "Flatpak":
             cmd = ['flatpak', 'install', '-y', install_target]
         else:
             QtWidgets.QMessageBox.critical(self, "Error", f"Unknown source: {source}")
             return
 
-        self._run_install_threaded(cmd, install_target)
+        self._run_install_threaded(cmd, install_target, input_data=input_data)
 
     def _install_local_deb(self):
         path = self.deb_path.text().strip()
@@ -378,12 +403,23 @@ class InstallDialog(QtWidgets.QDialog):
         if reply != QtWidgets.QMessageBox.Yes:
             return
 
+        input_data = None
         base = ['apt', 'install', '-y', path]
-        cmd = ['pkexec'] + base if SudoExecutor.has_pkexec() else ['sudo', '-S'] + base
+        if SudoExecutor.has_pkexec():
+            cmd = ['pkexec'] + base
+        else:
+            password, ok = QtWidgets.QInputDialog.getText(
+                self, "Sudo Password",
+                "Root access required for .deb install.\nEnter sudo password:",
+                QtWidgets.QLineEdit.Password)
+            if not ok or not password:
+                return
+            cmd = ['sudo', '-S'] + base
+            input_data = password + '\n'
 
-        self._run_install_threaded(cmd, fname, is_deb=True)
+        self._run_install_threaded(cmd, fname, is_deb=True, input_data=input_data)
 
-    def _run_install_threaded(self, cmd, display_name, is_deb=False):
+    def _run_install_threaded(self, cmd, display_name, is_deb=False, input_data=None):
         progress = QtWidgets.QProgressDialog(
             f"Installing '{display_name}'...\nPlease wait.", "Cancel", 0, 0, self)
         progress.setWindowTitle("Installing")
@@ -393,7 +429,7 @@ class InstallDialog(QtWidgets.QDialog):
         progress.show()
         QtWidgets.QApplication.processEvents()
 
-        self.thread = InstallThread(cmd, self)
+        self.thread = InstallThread(cmd, self, input_data=input_data)
 
         def on_complete(success, error):
             progress.close()
